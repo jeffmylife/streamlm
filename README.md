@@ -8,6 +8,8 @@
 
 A command-line interface for interacting with various Large Language Models with beautiful markdown-formatted responses.
 
+**Design Principle**: Frictionless interaction. Just type `lm hello` - no need for subcommands. The CLI defaults to chat mode for the fastest possible workflow.
+
 ## Installation
 
 ### uv (recommended)
@@ -28,12 +30,91 @@ brew install jeffmylife/streamlm/streamlm
 
 ## Usage
 
-After installation, you can use the `lm` command:
+### Basic Usage
+
+After installation, you can use the `lm` command. **The CLI defaults to chat mode** - just type your prompt:
 
 ```bash
 lm explain quantum computing
 lm -m gpt-4o "write a Python function"
 lm -m claude-3-5-sonnet "analyze this data"
+
+# Explicit 'chat' command also works
+lm chat "hello world"
+```
+
+### Gateway Routing
+
+StreamLM supports routing requests through different gateways for cost optimization and flexibility:
+
+```bash
+# Route through Vercel AI Gateway (no markup, low latency)
+lm --gateway vercel "explain quantum computing"
+
+# Route through OpenRouter (model discovery, transparent pricing)
+lm --gateway openrouter -m gpt-4o "write a function"
+
+# Direct provider access (default, supports reasoning models)
+lm --gateway direct "analyze this data"
+```
+
+**Gateway Benefits:**
+- **Vercel**: $5/month free credits, no token markup, <20ms latency
+- **OpenRouter**: Model discovery, pricing transparency, bring-your-own-key
+- **Direct**: Full provider feature support, reasoning models, lowest latency
+
+### Configuration
+
+StreamLM can be configured via config file (`~/.streamlm/config.yaml`), environment variables, or CLI flags:
+
+```bash
+# Interactive setup wizard
+lm config setup
+
+# Set default gateway
+lm config set gateway.default vercel
+
+# Configure gateway API keys
+lm config set gateway.vercel.api_key sk-your-ai-gateway-key
+
+# Set default model
+lm config set models.default gpt-4o
+
+# View current configuration
+lm config get
+
+# Validate configuration and API keys
+lm config validate
+
+# List available gateways
+lm config list-gateways
+```
+
+**Configuration Priority** (highest to lowest):
+1. CLI flags (`--gateway`, `--model`)
+2. Environment variables (`STREAMLM_GATEWAY`, provider API keys)
+3. Config file (`~/.streamlm/config.yaml`)
+4. Defaults (direct gateway, gemini-2.5-flash model)
+
+### Model Aliases
+
+Define shortcuts for your favorite models in the config:
+
+```yaml
+# ~/.streamlm/config.yaml
+models:
+  aliases:
+    gpt: "gpt-4o"
+    claude: "claude-3-5-sonnet"
+    fast: "gemini/gemini-2.5-flash"
+    smart: "gpt-4o"
+```
+
+Then use them:
+
+```bash
+lm -m fast "quick question"    # Uses gemini-2.5-flash
+lm -m smart "complex analysis"  # Uses gpt-4o
 ```
 
 ### Raw Markdown Output
@@ -62,26 +143,38 @@ StreamLM provides access to various Large Language Models including:
 - **xAI**: Grok-4, Grok-3-beta, Grok-3-mini-beta
 - **Local models**: Via Ollama (Llama3.3, Qwen2.5, DeepSeek-Coder, etc.)
 
-### Options
+### Chat Command Options
 
-- `--model` / `-m`: Choose the LLM model
+- `--model` / `-m`: Choose the LLM model (or use alias from config)
+- `--gateway` / `-g`: Route through gateway (direct, vercel, openrouter)
 - `--image` / `-i`: Include image files for vision models
 - `--context` / `-c`: Add context from a file
 - `--max-tokens` / `-t`: Set maximum response length
 - `--temperature` / `-temp`: Control response creativity (0.0-1.0)
-- `--think`: Show reasoning process (for reasoning models)
+- `--think`: Show reasoning process (reasoning models, direct gateway only)
 - `--debug` / `-d`: Enable debug mode
 - `--raw` / `--md`: Output raw markdown without Rich formatting
+
+### Config Command Actions
+
+- `lm config setup`: Interactive configuration wizard
+- `lm config get [key]`: Get configuration value
+- `lm config set <key> <value>`: Set configuration value
+- `lm config validate`: Validate configuration and API keys
+- `lm config list-gateways`: Show available gateways and their status
 
 ## Features
 
 - 🎨 Beautiful markdown-formatted responses
+- 🌐 **Gateway routing** (Vercel AI Gateway, OpenRouter, or direct)
+- ⚙️ **Flexible configuration** (config file, env vars, CLI flags)
+- 🔑 **Model aliases** for quick access to favorite models
 - 🖼️ Image input support for compatible models
 - 📁 Context file support
 - 🧠 Reasoning model support (DeepSeek, OpenAI o1, etc.)
 - 🔧 Extensive model support across providers
 - ⚡ Fast and lightweight
-- 🛠️ Easy configuration
+- 🛠️ Easy configuration management
 
 ## Links
 

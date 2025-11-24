@@ -45,6 +45,7 @@ dependencies = [
     "openai>=1.0.0",
     "mistune>=3.0.0",
     "rich-click>=1.7.0",
+    "pyyaml>=6.0.0",
 ]
 
 [project.optional-dependencies]
@@ -60,7 +61,7 @@ Issues = "https://github.com/jeffmylife/streamlm/issues"
 Changelog = "https://github.com/jeffmylife/streamlm/releases"
 
 [project.scripts]
-lm = "llm_cli.cli:app"
+lm = "llm_cli.cli:main"
 
 [build-system]
 requires = ["hatchling"]

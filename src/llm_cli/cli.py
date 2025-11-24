@@ -17,12 +17,52 @@ from openai.types.chat import ChatCompletionMessageParam
 from rich.console import Console
 from rich.traceback import install
 from .streaming_markdown import StreamingMarkdownRenderer
+from .config import get_config_manager
+from .gateways import GatewayRouter, get_model_provider, is_reasoning_model
 
 install()
 
 # Initialize Typer app and Rich console
-app = typer.Typer(help="A CLI tool for interacting with various LLMs", name="llm")
+app = typer.Typer(
+    help="A CLI tool for interacting with various LLMs",
+    name="llm",
+    no_args_is_help=False,  # Allow calling without args to trigger default command
+)
 console = Console()
+
+
+def version_callback_global(value: bool):
+    """Global callback for --version option."""
+    if value:
+        from . import __version__
+
+        commit_hash = get_git_commit_hash()
+        console.print(f"streamlm version {__version__} (commit: {commit_hash})")
+        raise typer.Exit()
+
+
+# Callback to handle global options including --version
+@app.callback(invoke_without_command=True)
+def global_options(
+    ctx: typer.Context,
+    version: Optional[bool] = typer.Option(
+        None,
+        "--version",
+        "-v",
+        callback=version_callback_global,
+        is_eager=True,
+        help="Show version information and exit",
+    ),
+):
+    """A CLI tool for interacting with various LLMs with streaming markdown output.
+
+    Design principle: The CLI should be frictionless. Users should be able to type
+    'lm hello' without needing to specify a subcommand. The chat command is the default.
+    """
+    # If no subcommand is provided and not asking for version, default to chat
+    if ctx.invoked_subcommand is None and not version:
+        # We'll handle this by making the arguments pass through to chat
+        pass
 
 
 def get_git_commit_hash() -> str:
@@ -54,53 +94,6 @@ def version_callback(value: bool):
 
 litellm.suppress_debug_info = True
 litellm.drop_params = True
-
-
-def is_reasoning_model(model: str) -> bool:
-    """Check if a model supports reasoning/thinking capabilities."""
-    model_lower = model.lower()
-
-    # DeepSeek reasoning models
-    if any(name in model_lower for name in ["deepseek-reasoner", "deepseek-r1"]):
-        return True
-
-    # OpenAI o1 models
-    if any(name in model_lower for name in ["o1-preview", "o1-mini", "o1-pro"]):
-        return True
-
-    # xAI Grok models with reasoning
-    if any(name in model_lower for name in ["grok-3", "grok-4"]):
-        return True
-
-    # Add other reasoning models as they become available
-    # Example: if "reasoning" in model_lower or "think" in model_lower:
-    #     return True
-
-    return False
-
-
-def get_model_provider(model: str) -> str:
-    """Determine the provider for a given model."""
-    model_lower = model.lower()
-
-    if model_lower.startswith("openrouter/"):
-        return "openrouter"
-    elif model_lower.startswith("xai/") or any(
-        name in model_lower for name in ["grok"]
-    ):
-        return "xai"
-    elif any(name in model_lower for name in ["gpt", "openai", "o1-"]):
-        return "openai"
-    elif any(name in model_lower for name in ["claude", "anthropic"]):
-        return "anthropic"
-    elif "gemini" in model_lower:
-        return "gemini"
-    elif "ollama" in model_lower:
-        return "ollama"
-    elif "deepseek" in model_lower:
-        return "deepseek"
-    else:
-        return "unknown"
 
 
 def encode_image_to_base64(image_path: str) -> str:
@@ -440,7 +433,7 @@ def stream_llm_response(
 def chat(
     prompt: list[str] = typer.Argument(..., help="The prompt to send to the LLM"),
     model: str = typer.Option(
-        "gemini/gemini-2.5-flash",
+        None,
         "--model",
         "-m",
         help="The LLM model to use. Examples: gpt-4o, claude-3-sonnet-20240229, ollama/llama2",
@@ -469,13 +462,11 @@ def chat(
         "--think",
         help="Show the model's reasoning process (works with reasoning models like DeepSeek, OpenAI o1, etc.)",
     ),
-    version: Optional[bool] = typer.Option(
+    gateway: Optional[str] = typer.Option(
         None,
-        "--version",
-        "-v",
-        callback=version_callback,
-        is_eager=True,
-        help="Show version information and exit",
+        "--gateway",
+        "-g",
+        help="Gateway to route request through: direct, vercel, openrouter",
     ),
     raw: bool = typer.Option(
         False,
@@ -488,6 +479,18 @@ def chat(
 
     # Check if we're being piped to another command
     is_being_piped = not sys.stdout.isatty()
+
+    # Initialize config manager and gateway router
+    config_mgr = get_config_manager()
+    router = GatewayRouter(config_mgr)
+
+    # Resolve model from config if not specified
+    if model is None:
+        config = config_mgr.load()
+        model = config.default_model
+    else:
+        # Resolve model aliases
+        model = config_mgr.resolve_model_alias(model)
 
     # Only show debug info if we're not being piped
     if not is_being_piped:
@@ -530,91 +533,120 @@ def chat(
     if not is_being_piped:
         print(f"Prompt: {display_text}")  # Debug print
 
-    # Validate and check API keys based on the model
+    # Determine provider and route through gateway
     provider = get_model_provider(model)
 
-    if provider == "openrouter":
-        api_key = os.getenv("OPENROUTER_API_KEY")
-        if not api_key:
-            console.print(
-                "[red]Error: OPENROUTER_API_KEY environment variable is not set[/red]"
-            )
-            sys.exit(1)
-        if debug and not is_being_piped:
-            console.print(
-                f"[dim]Found OpenRouter API key: {api_key[:4]}...{api_key[-4:]}[/dim]"
-            )
-    elif provider == "openai":
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            console.print(
-                "[red]Error: OPENAI_API_KEY environment variable is not set[/red]"
-            )
-            sys.exit(1)
-        if debug and not is_being_piped:
-            console.print(
-                f"[dim]Found OpenAI API key: {api_key[:4]}...{api_key[-4:]}[/dim]"
-            )
-    elif provider == "anthropic":
-        api_key = os.getenv("ANTHROPIC_API_KEY")
-        if not api_key:
-            console.print(
-                "[red]Error: ANTHROPIC_API_KEY environment variable is not set[/red]"
-            )
-            sys.exit(1)
-        if debug and not is_being_piped:
-            console.print(
-                f"[dim]Found Anthropic API key: {api_key[:4]}...{api_key[-4:]}[/dim]"
-            )
-    elif provider == "gemini":
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            console.print(
-                "[red]Error: GEMINI_API_KEY environment variable is not set[/red]"
-            )
-            sys.exit(1)
-        if debug and not is_being_piped:
-            console.print(
-                f"[dim]Found Gemini API key: {api_key[:4]}...{api_key[-4:]}[/dim]"
-            )
-    elif provider == "deepseek":
-        api_key = os.getenv("DEEPSEEK_API_KEY")
-        if not api_key:
-            console.print(
-                "[red]Error: DEEPSEEK_API_KEY environment variable is not set[/red]"
-            )
-            sys.exit(1)
-        if debug and not is_being_piped:
-            console.print(
-                f"[dim]Found DeepSeek API key: {api_key[:4]}...{api_key[-4:]}[/dim]"
-            )
-    elif provider == "xai":
-        api_key = os.getenv("XAI_API_KEY")
-        if not api_key:
-            console.print(
-                "[red]Error: XAI_API_KEY environment variable is not set[/red]"
-            )
-            sys.exit(1)
-        if debug and not is_being_piped:
-            console.print(
-                f"[dim]Found xAI API key: {api_key[:4]}...{api_key[-4:]}[/dim]"
-            )
-    elif provider == "ollama":
-        # Check if Ollama server is running
-        try:
-            import requests
+    # Route the request
+    try:
+        route = router.route_request(model, gateway_override=gateway, provider=provider)
+    except ValueError as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
 
-            response = requests.get("http://localhost:11434/api/tags")
-            if response.status_code != 200:
+    # Update model name if gateway routing modified it
+    model = route.model_name
+
+    # Configure litellm if using a gateway
+    if route.gateway != "direct":
+        router.configure_litellm_for_route(route)
+
+        if not is_being_piped:
+            console.print(f"[dim]Routing through {route.gateway} gateway[/dim]")
+
+    # Check if reasoning is supported with this gateway
+    reasoning_supported = router.supports_reasoning(model, route.gateway)
+    if think and not reasoning_supported:
+        console.print(
+            f"[yellow]Warning: Reasoning mode not supported via {route.gateway} gateway. "
+            f"Use --gateway direct for reasoning features.[/yellow]"
+        )
+        think = False
+
+    # Validate and check API keys based on the model (only for direct access)
+    # For gateway routing, the gateway handles authentication
+    if route.gateway == "direct":
+        if provider == "openrouter":
+            api_key = os.getenv("OPENROUTER_API_KEY")
+            if not api_key:
                 console.print(
-                    "[red]Error: Ollama server is not running. Please start it with 'ollama serve'[/red]"
+                    "[red]Error: OPENROUTER_API_KEY environment variable is not set[/red]"
                 )
                 sys.exit(1)
-        except requests.exceptions.ConnectionError:
-            console.print(
-                "[red]Error: Cannot connect to Ollama server. Please start it with 'ollama serve'[/red]"
-            )
-            sys.exit(1)
+            if debug and not is_being_piped:
+                console.print(
+                    f"[dim]Found OpenRouter API key: {api_key[:4]}...{api_key[-4:]}[/dim]"
+                )
+        elif provider == "openai":
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                console.print(
+                    "[red]Error: OPENAI_API_KEY environment variable is not set[/red]"
+                )
+                sys.exit(1)
+            if debug and not is_being_piped:
+                console.print(
+                    f"[dim]Found OpenAI API key: {api_key[:4]}...{api_key[-4:]}[/dim]"
+                )
+        elif provider == "anthropic":
+            api_key = os.getenv("ANTHROPIC_API_KEY")
+            if not api_key:
+                console.print(
+                    "[red]Error: ANTHROPIC_API_KEY environment variable is not set[/red]"
+                )
+                sys.exit(1)
+            if debug and not is_being_piped:
+                console.print(
+                    f"[dim]Found Anthropic API key: {api_key[:4]}...{api_key[-4:]}[/dim]"
+                )
+        elif provider == "gemini":
+            api_key = os.getenv("GEMINI_API_KEY")
+            if not api_key:
+                console.print(
+                    "[red]Error: GEMINI_API_KEY environment variable is not set[/red]"
+                )
+                sys.exit(1)
+            if debug and not is_being_piped:
+                console.print(
+                    f"[dim]Found Gemini API key: {api_key[:4]}...{api_key[-4:]}[/dim]"
+                )
+        elif provider == "deepseek":
+            api_key = os.getenv("DEEPSEEK_API_KEY")
+            if not api_key:
+                console.print(
+                    "[red]Error: DEEPSEEK_API_KEY environment variable is not set[/red]"
+                )
+                sys.exit(1)
+            if debug and not is_being_piped:
+                console.print(
+                    f"[dim]Found DeepSeek API key: {api_key[:4]}...{api_key[-4:]}[/dim]"
+                )
+        elif provider == "xai":
+            api_key = os.getenv("XAI_API_KEY")
+            if not api_key:
+                console.print(
+                    "[red]Error: XAI_API_KEY environment variable is not set[/red]"
+                )
+                sys.exit(1)
+            if debug and not is_being_piped:
+                console.print(
+                    f"[dim]Found xAI API key: {api_key[:4]}...{api_key[-4:]}[/dim]"
+                )
+        elif provider == "ollama":
+            # Check if Ollama server is running
+            try:
+                import requests
+
+                response = requests.get("http://localhost:11434/api/tags")
+                if response.status_code != 200:
+                    console.print(
+                        "[red]Error: Ollama server is not running. Please start it with 'ollama serve'[/red]"
+                    )
+                    sys.exit(1)
+            except requests.exceptions.ConnectionError:
+                console.print(
+                    "[red]Error: Cannot connect to Ollama server. Please start it with 'ollama serve'[/red]"
+                )
+                sys.exit(1)
 
     # Show what model we're using (only if not being piped)
     if not is_being_piped:
@@ -655,8 +687,186 @@ def chat(
         sys.exit(1)
 
 
+@app.command(name="config")
+def config_cmd(
+    action: str = typer.Argument(
+        help="Action to perform: get, set, validate, list-gateways, setup"
+    ),
+    key: Optional[str] = typer.Argument(None, help="Config key (for get/set)"),
+    value: Optional[str] = typer.Argument(None, help="Config value (for set)"),
+):
+    """Manage streamlm configuration."""
+    config_mgr = get_config_manager()
+
+    if action == "get":
+        # Get config value
+        result = config_mgr.get(key)
+        if result is None:
+            console.print(f"[yellow]Config key '{key}' not found[/yellow]")
+        else:
+            import json
+
+            console.print(json.dumps(result, indent=2))
+
+    elif action == "set":
+        # Set config value
+        if not key or value is None:
+            console.print("[red]Error: 'set' requires both key and value[/red]")
+            console.print("Example: lm config set gateway.default vercel")
+            sys.exit(1)
+
+        try:
+            config_mgr.set(key, value)
+            console.print(f"[green]✓ Set {key} = {value}[/green]")
+            console.print(f"[dim]Config saved to {config_mgr.config_path}[/dim]")
+        except ValueError as e:
+            console.print(f"[red]Error: {e}[/red]")
+            sys.exit(1)
+
+    elif action == "validate":
+        # Validate configuration
+        results = config_mgr.validate()
+
+        console.print("\n[bold]Configuration Validation[/bold]")
+        console.print(f"Config file: {results['config_file']}")
+        console.print(f"Exists: {'✓' if results['exists'] else '✗'}\n")
+
+        console.print("[bold]Gateway Configuration:[/bold]")
+        console.print(f"  Default: {results['gateway']['default']}")
+        console.print(
+            f"  Vercel: {'✓' if results['gateway']['vercel']['api_key_set'] else '✗'} API key"
+        )
+        console.print(
+            f"  OpenRouter: {'✓' if results['gateway']['openrouter']['api_key_set'] else '✗'} API key\n"
+        )
+
+        console.print("[bold]Provider API Keys:[/bold]")
+        for provider, info in results["providers"].items():
+            status = "✓" if info["available"] else "✗"
+            source = []
+            if info["config_key_set"]:
+                source.append("config")
+            if info["env_key_set"]:
+                source.append("env")
+            source_str = f" ({', '.join(source)})" if source else ""
+            console.print(f"  {provider}: {status}{source_str}")
+
+        console.print(f"\n[bold]Models:[/bold]")
+        console.print(f"  Default: {results['models']['default']}")
+        console.print(f"  Aliases: {len(results['models']['aliases'])} defined")
+
+    elif action == "list-gateways":
+        # List available gateways
+        config = config_mgr.load()
+
+        console.print("\n[bold]Available Gateways:[/bold]\n")
+
+        console.print("[cyan]direct[/cyan] (default)")
+        console.print("  Route directly to provider APIs")
+        console.print("  Supports: All providers, reasoning models")
+        console.print("  Requires: Provider-specific API keys\n")
+
+        console.print("[cyan]vercel[/cyan]")
+        console.print("  Route through Vercel AI Gateway")
+        console.print("  Benefits: No markup, $5/month free, low latency (<20ms)")
+        console.print(
+            f"  Status: {'✓ Configured' if config.vercel.api_key else '✗ Not configured'}"
+        )
+        console.print("  Requires: AI_GATEWAY_API_KEY\n")
+
+        console.print("[cyan]openrouter[/cyan]")
+        console.print("  Route through OpenRouter")
+        console.print("  Benefits: Model discovery, pricing transparency, BYOK")
+        console.print(
+            f"  Status: {'✓ Configured' if config.openrouter.api_key else '✗ Not configured'}"
+        )
+        console.print("  Requires: OPENROUTER_API_KEY\n")
+
+        console.print("[dim]Current default: " + config_mgr.get_gateway() + "[/dim]")
+
+    elif action == "setup":
+        # Interactive setup wizard
+        console.print("\n[bold]StreamLM Configuration Setup[/bold]\n")
+
+        config = config_mgr.load()
+
+        # Gateway selection
+        console.print("[bold]1. Default Gateway[/bold]")
+        console.print("Which gateway would you like to use by default?")
+        console.print("  [cyan]direct[/cyan]    - Direct provider access (current behavior)")
+        console.print(
+            "  [cyan]vercel[/cyan]    - Vercel AI Gateway (no markup, low latency)"
+        )
+        console.print(
+            "  [cyan]openrouter[/cyan] - OpenRouter (model discovery, BYOK)"
+        )
+
+        gateway_choice = typer.prompt(
+            "Gateway", default=config.default_gateway, type=str
+        )
+
+        if gateway_choice in ["direct", "vercel", "openrouter"]:
+            config.default_gateway = gateway_choice
+        else:
+            console.print(
+                f"[yellow]Invalid gateway '{gateway_choice}', keeping '{config.default_gateway}'[/yellow]"
+            )
+
+        # Gateway API keys
+        if gateway_choice == "vercel":
+            console.print("\n[bold]2. Vercel AI Gateway Configuration[/bold]")
+            console.print("Enter your Vercel AI Gateway API key (or leave blank to skip):")
+            vercel_key = typer.prompt("AI_GATEWAY_API_KEY", default="", type=str)
+            if vercel_key:
+                config.vercel.api_key = vercel_key
+
+        elif gateway_choice == "openrouter":
+            console.print("\n[bold]2. OpenRouter Configuration[/bold]")
+            console.print("Enter your OpenRouter API key (or leave blank to skip):")
+            openrouter_key = typer.prompt("OPENROUTER_API_KEY", default="", type=str)
+            if openrouter_key:
+                config.openrouter.api_key = openrouter_key
+
+        # Default model
+        console.print("\n[bold]3. Default Model[/bold]")
+        console.print(f"Current default: {config.default_model}")
+        new_model = typer.prompt("Default model", default=config.default_model, type=str)
+        config.default_model = new_model
+
+        # Save configuration
+        config_mgr.save(config)
+
+        console.print(
+            f"\n[green]✓ Configuration saved to {config_mgr.config_path}[/green]"
+        )
+        console.print("\nRun 'lm config validate' to check your configuration.")
+
+    else:
+        console.print(f"[red]Unknown action: {action}[/red]")
+        console.print(
+            "Valid actions: get, set, validate, list-gateways, setup"
+        )
+        sys.exit(1)
+
+
 def main():
-    """Entry point for the CLI."""
+    """Entry point for the CLI.
+
+    Design principle: Make chat the default command for frictionless UX.
+    Users should be able to type 'lm hello' without 'chat' subcommand.
+    """
+    import sys
+
+    # If first arg is not a known command, inject 'chat'
+    if len(sys.argv) > 1:
+        first_arg = sys.argv[1]
+        known_commands = ['chat', 'config']
+        global_flags = ['--version', '-v', '--help', '--install-completion', '--show-completion']
+
+        # If first arg is not a command and not a global flag, default to chat
+        if first_arg not in known_commands and first_arg not in global_flags:
+            sys.argv.insert(1, 'chat')
+
     app()
 
 
