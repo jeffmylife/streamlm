@@ -1,6 +1,6 @@
 [project]
 name = "streamlm"
-version = "0.1.10"
+version = "0.1.11"
 description = "A command-line interface for interacting with various Large Language Models with streaming markdown output"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -47,6 +47,12 @@ dependencies = [
     "rich-click>=1.7.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/jeffmylife/streamlm"
 Repository = "https://github.com/jeffmylife/streamlm"
@@ -66,3 +72,28 @@ packages = ["src/llm_cli"]
 [tool.uv]
 package = true
 managed = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--strict-markers",
+    "--strict-config",
+]
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["tests/*", "**/__pycache__/*"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]

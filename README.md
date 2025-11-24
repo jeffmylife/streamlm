@@ -95,6 +95,35 @@ MIT License - see [LICENSE](LICENSE) file for details.
 
 ## Development
 
+### Setup
+
+```bash
+# Clone the repository
+git clone https://github.com/jeffmylife/streamlm.git
+cd streamlm
+
+# Install with dev dependencies
+uv pip install -e ".[dev]"
+```
+
+### Running Tests
+
+All tests use `uv run` for consistency:
+
+```bash
+# Run all tests
+uv run pytest tests/ -v
+
+# Run with coverage
+uv run pytest tests/ -v --cov=src --cov-report=term-missing
+
+# Run specific test types
+uv run pytest tests/test_cli.py -v                    # Unit tests only
+uv run pytest tests/test_integration.py -v            # Integration tests only
+```
+
+### Release Process
+
 ```bash
 # Make your changes
 uv version --bump patch
@@ -103,5 +132,5 @@ git commit -m "feat: your changes"
 git push
 
 # Create GitHub release (this triggers everything automatically)
-gh release create v0.1.4 --generate-notes
+gh release create v0.1.11 --generate-notes
 ```
