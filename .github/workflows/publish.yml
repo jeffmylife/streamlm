@@ -60,8 +60,10 @@ jobs:
         run: |
           VERSION="${{ github.event.release.tag_name }}"
           VERSION=${VERSION#v}  # Remove 'v' prefix
-          BODY="${{ github.event.release.body }}"
-          UPDATED_BODY="$BODY
+
+          # Append installation instructions to existing release body
+          gh release edit ${{ github.event.release.tag_name }} --notes-file - <<EOF
+          ${{ github.event.release.body }}
 
           ## 📦 Installation
 
@@ -70,8 +72,7 @@ jobs:
           \`\`\`
 
           **PyPI**: https://pypi.org/project/streamlm/$VERSION/
-          **Homebrew**: Will be updated automatically"
-
-          gh release edit ${{ github.event.release.tag_name }} --notes "$UPDATED_BODY"
+          **Homebrew**: Will be updated automatically
+          EOF
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
