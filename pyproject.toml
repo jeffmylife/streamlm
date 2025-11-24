@@ -1,6 +1,6 @@
 [project]
 name = "streamlm"
-version = "0.1.11"
+version = "0.1.12"
 description = "A command-line interface for interacting with various Large Language Models with streaming markdown output"
 readme = "README.md"
 requires-python = ">=3.10"
