@@ -19,6 +19,7 @@ from rich.traceback import install
 from .streaming_markdown import StreamingMarkdownRenderer
 from .config import get_config_manager
 from .gateways import GatewayRouter, get_model_provider, is_reasoning_model
+from .database import ConversationDatabase
 
 install()
 
@@ -112,8 +113,12 @@ def stream_llm_response(
     show_reasoning: bool = False,
     is_being_piped: bool = False,
     raw_output: bool = False,
-):
-    """Stream responses from the LLM and format them using Rich."""
+) -> tuple[str, str, Optional[dict]]:
+    """Stream responses from the LLM and format them using Rich.
+
+    Returns:
+        Tuple of (accumulated_content, accumulated_reasoning, usage_info)
+    """
     try:
         # Add images if provided
         if images:
@@ -172,6 +177,7 @@ def stream_llm_response(
         # Initialize strings to accumulate the response
         accumulated_reasoning = ""
         accumulated_content = ""
+        usage_info = None
         in_reasoning_phase = True
 
         # Check if this is a reasoning model and reasoning is requested
@@ -423,6 +429,9 @@ def stream_llm_response(
                 sys.stdout.write("\n")
                 sys.stdout.flush()
 
+        # Return accumulated content and reasoning
+        return accumulated_content, accumulated_reasoning, usage_info
+
     except Exception as e:
         if not is_being_piped:
             console.print(f"[red]Error: {str(e)}[/red]")
@@ -474,6 +483,17 @@ def chat(
         "--md",
         help="Output raw markdown without Rich formatting",
     ),
+    session: Optional[str] = typer.Option(
+        None,
+        "--session",
+        "-s",
+        help="Session ID to continue conversation. Creates new session if it doesn't exist.",
+    ),
+    session_name: Optional[str] = typer.Option(
+        None,
+        "--session-name",
+        help="Name for the session (only used when creating a new session)",
+    ),
 ):
     """Chat with an LLM model and get markdown-formatted responses. Supports image input for compatible models."""
 
@@ -484,9 +504,32 @@ def chat(
     config_mgr = get_config_manager()
     router = GatewayRouter(config_mgr)
 
+    # Initialize database for session management
+    config = config_mgr.load()
+    db_path = os.path.expanduser("~/.streamlm/conversations.db")
+    db = ConversationDatabase(db_path)
+
+    # Handle session management
+    db_session = None
+    if session:
+        # Check if session exists
+        db_session = db.get_session(session)
+        if db_session:
+            if not is_being_piped:
+                console.print(f"[dim]Continuing session '{db_session.name}'[/dim]")
+        else:
+            # Create new session
+            session_display_name = session_name or session
+            db_session = db.create_session(
+                session_id=session,
+                name=session_display_name,
+                model=model or config.default_model,
+            )
+            if not is_being_piped:
+                console.print(f"[dim]Created new session '{session_display_name}'[/dim]")
+
     # Resolve model from config if not specified
     if model is None:
-        config = config_mgr.load()
         model = config.default_model
     else:
         # Resolve model aliases
@@ -526,8 +569,14 @@ def chat(
             console.print(f"[red]Error reading context file: {str(e)}[/red]")
             sys.exit(1)
 
-    # Create the messages list
-    messages = [{"role": "user", "content": message_content}]
+    # Create the messages list with session history if available
+    if db_session:
+        # Load conversation history
+        messages = db.get_message_history_for_llm(session)
+        # Add the new user message
+        messages.append({"role": "user", "content": message_content})
+    else:
+        messages = [{"role": "user", "content": message_content}]
 
     # Only show prompt info if we're not being piped
     if not is_being_piped:
@@ -666,7 +715,7 @@ def chat(
 
     # Stream the response
     try:
-        stream_llm_response(
+        response_content, reasoning_content, usage = stream_llm_response(
             model=model,
             prompt=prompt_text,
             messages=messages,
@@ -677,6 +726,38 @@ def chat(
             is_being_piped=is_being_piped,  # Pass pipe status to response handler
             raw_output=raw,
         )
+
+        # Save to database if session is active
+        if db_session and response_content:
+            # Save user message
+            user_metadata = {}
+            if images:
+                user_metadata["images"] = images
+            if context:
+                user_metadata["context_file"] = context
+
+            db.add_message(
+                session_id=session,
+                role="user",
+                content=message_content,
+                model=model,
+                metadata=user_metadata if user_metadata else None,
+            )
+
+            # Save assistant response
+            prompt_tokens = usage.get("prompt_tokens") if usage else None
+            completion_tokens = usage.get("completion_tokens") if usage else None
+
+            db.add_message(
+                session_id=session,
+                role="assistant",
+                content=response_content,
+                model=model,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=completion_tokens,
+                reasoning_content=reasoning_content if reasoning_content else None,
+            )
+
     except Exception as e:
         if not is_being_piped:
             print(f"Error occurred: {str(e)}")  # Basic print for errors
@@ -849,6 +930,129 @@ def config_cmd(
         sys.exit(1)
 
 
+@app.command(name="sessions")
+def sessions_cmd(
+    list_all: bool = typer.Option(False, "--list", "-l", help="List all sessions"),
+    show: Optional[str] = typer.Option(None, "--show", help="Show session details and messages"),
+    delete: Optional[str] = typer.Option(None, "--delete", help="Delete a session"),
+    clear: Optional[str] = typer.Option(None, "--clear", help="Clear messages in a session"),
+    export: Optional[str] = typer.Option(None, "--export", help="Export session to JSON"),
+):
+    """Manage conversation sessions."""
+    from datetime import datetime
+
+    db_path = os.path.expanduser("~/.streamlm/conversations.db")
+    db = ConversationDatabase(db_path)
+
+    if list_all:
+        # List all sessions
+        sessions = db.list_sessions()
+        if not sessions:
+            console.print("[yellow]No sessions found.[/yellow]")
+            return
+
+        console.print("\n[bold]Conversation Sessions[/bold]\n")
+
+        from rich.table import Table
+
+        table = Table(show_header=True, header_style="bold cyan")
+        table.add_column("ID", style="green")
+        table.add_column("Name", style="white")
+        table.add_column("Model", style="blue")
+        table.add_column("Messages", justify="right", style="yellow")
+        table.add_column("Tokens", justify="right", style="magenta")
+        table.add_column("Updated", style="dim")
+
+        for sess in sessions:
+            updated = datetime.fromtimestamp(sess.updated_at).strftime("%Y-%m-%d %H:%M")
+            table.add_row(
+                sess.id,
+                sess.name,
+                sess.model,
+                str(sess.message_count),
+                str(sess.total_tokens) if sess.total_tokens > 0 else "-",
+                updated,
+            )
+
+        console.print(table)
+        console.print()
+
+    elif show:
+        # Show session details
+        session = db.get_session(show)
+        if not session:
+            console.print(f"[red]Session '{show}' not found.[/red]")
+            sys.exit(1)
+
+        messages = db.get_messages(show)
+
+        console.print(f"\n[bold]Session: {session.name}[/bold]")
+        console.print(f"[dim]ID: {session.id}[/dim]")
+        console.print(f"[dim]Model: {session.model}[/dim]")
+        console.print(f"[dim]Messages: {session.message_count}[/dim]")
+        console.print(f"[dim]Total tokens: {session.total_tokens}[/dim]")
+        created = datetime.fromtimestamp(session.created_at).strftime("%Y-%m-%d %H:%M:%S")
+        updated = datetime.fromtimestamp(session.updated_at).strftime("%Y-%m-%d %H:%M:%S")
+        console.print(f"[dim]Created: {created}[/dim]")
+        console.print(f"[dim]Updated: {updated}[/dim]")
+        console.print()
+
+        if messages:
+            console.print("[bold]Conversation History:[/bold]\n")
+            for msg in messages:
+                role_color = "green" if msg.role == "user" else "blue"
+                timestamp = datetime.fromtimestamp(msg.created_at).strftime("%H:%M:%S")
+                console.print(f"[{role_color}]■ {msg.role}[/{role_color}] [dim]({timestamp})[/dim]")
+                console.print(f"  {msg.content[:200]}{'...' if len(msg.content) > 200 else ''}\n")
+
+                if msg.reasoning_content:
+                    console.print(f"  [dim italic]💭 Reasoning: {msg.reasoning_content[:100]}...[/dim italic]\n")
+        else:
+            console.print("[dim]No messages in this session.[/dim]")
+
+    elif delete:
+        # Delete session
+        session = db.get_session(delete)
+        if not session:
+            console.print(f"[red]Session '{delete}' not found.[/red]")
+            sys.exit(1)
+
+        if db.delete_session(delete):
+            console.print(f"[green]✓[/green] Session '{session.name}' deleted.")
+        else:
+            console.print(f"[red]Failed to delete session '{delete}'.[/red]")
+            sys.exit(1)
+
+    elif clear:
+        # Clear messages in session
+        session = db.get_session(clear)
+        if not session:
+            console.print(f"[red]Session '{clear}' not found.[/red]")
+            sys.exit(1)
+
+        if db.clear_messages(clear):
+            console.print(f"[green]✓[/green] Cleared {session.message_count} messages from session '{session.name}'.")
+        else:
+            console.print(f"[red]Failed to clear messages from session '{clear}'.[/red]")
+            sys.exit(1)
+
+    elif export:
+        # Export session to JSON
+        data = db.export_session(export)
+        if not data:
+            console.print(f"[red]Session '{export}' not found.[/red]")
+            sys.exit(1)
+
+        import json
+
+        print(json.dumps(data, indent=2))
+
+    else:
+        console.print("[yellow]Please specify an action: --list, --show, --delete, --clear, or --export[/yellow]")
+        console.print("Usage: lm sessions --list")
+        sys.exit(1)
+
+
 def main():
     """Entry point for the CLI.
 
@@ -860,7 +1064,7 @@ def main():
     # If first arg is not a known command, inject 'chat'
     if len(sys.argv) > 1:
         first_arg = sys.argv[1]
-        known_commands = ['chat', 'config']
+        known_commands = ['chat', 'config', 'sessions']
         global_flags = ['--version', '-v', '--help', '--install-completion', '--show-completion']
 
         # If first arg is not a command and not a global flag, default to chat

@@ -152,8 +152,46 @@ StreamLM provides access to various Large Language Models including:
 - `--max-tokens` / `-t`: Set maximum response length
 - `--temperature` / `-temp`: Control response creativity (0.0-1.0)
 - `--think`: Show reasoning process (reasoning models, direct gateway only)
+- `--session` / `-s`: Session ID to continue conversation
+- `--session-name`: Name for a new session (only when creating)
 - `--debug` / `-d`: Enable debug mode
 - `--raw` / `--md`: Output raw markdown without Rich formatting
+
+### Session Management
+
+StreamLM supports conversation sessions to maintain context across multiple messages:
+
+```bash
+# Create a new session or continue an existing one
+lm --session my-project "How do I implement authentication?"
+lm --session my-project "Can you show me an example?"  # Continues with context
+
+# Name your session when creating it
+lm --session dev-2025 --session-name "Development Session" "Let's start coding"
+
+# List all sessions
+lm sessions --list
+
+# Show session details and conversation history
+lm sessions --show my-project
+
+# Export session to JSON
+lm sessions --export my-project > session.json
+
+# Clear messages from a session (keeps session metadata)
+lm sessions --clear my-project
+
+# Delete a session completely
+lm sessions --delete my-project
+```
+
+**Session Features:**
+- Automatic conversation history - context is maintained across messages
+- Token usage tracking per session
+- Local-first storage using libSQL (SQLite compatible)
+- Optional remote sync with Turso (not required)
+- Export/import sessions for backup or sharing
+- Metadata support for images and context files
 
 ### Config Command Actions
 
@@ -166,12 +204,15 @@ StreamLM provides access to various Large Language Models including:
 ## Features
 
 - 🎨 Beautiful markdown-formatted responses
+- 💬 **Conversation sessions** with persistent history
 - 🌐 **Gateway routing** (Vercel AI Gateway, OpenRouter, or direct)
 - ⚙️ **Flexible configuration** (config file, env vars, CLI flags)
 - 🔑 **Model aliases** for quick access to favorite models
 - 🖼️ Image input support for compatible models
 - 📁 Context file support
 - 🧠 Reasoning model support (DeepSeek, OpenAI o1, etc.)
+- 📊 Token usage tracking per session
+- 💾 Local-first database storage (no cloud required)
 - 🔧 Extensive model support across providers
 - ⚡ Fast and lightweight
 - 🛠️ Easy configuration management

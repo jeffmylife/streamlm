@@ -1,6 +1,6 @@
 [project]
 name = "streamlm"
-version = "0.1.13"
+version = "0.1.14"
 description = "A command-line interface for interacting with various Large Language Models with streaming markdown output"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -46,6 +46,7 @@ dependencies = [
     "mistune>=3.0.0",
     "rich-click>=1.7.0",
     "pyyaml>=6.0.0",
+    "libsql-client>=0.3.1",
 ]
 
 [project.optional-dependencies]
