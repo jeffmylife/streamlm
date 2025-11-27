@@ -500,6 +500,12 @@ def chat(
     # Check if we're being piped to another command
     is_being_piped = not sys.stdout.isatty()
 
+    # Check for updates once per day (non-blocking)
+    from .version_check import check_for_updates
+    from . import __version__
+
+    check_for_updates(__version__, is_being_piped)
+
     # Initialize config manager and gateway router
     config_mgr = get_config_manager()
     router = GatewayRouter(config_mgr)
@@ -930,6 +936,40 @@ def config_cmd(
         sys.exit(1)
 
 
+@app.command(name="upgrade")
+def upgrade_cmd(
+    check: bool = typer.Option(False, "--check", help="Check for updates without upgrading"),
+):
+    """Upgrade streamlm to the latest version."""
+    from .version_check import upgrade_streamlm, get_latest_version
+    from . import __version__
+
+    if check:
+        # Just check for updates
+        console.print(f"Current version: [cyan]v{__version__}[/cyan]")
+        console.print("[dim]Checking for updates...[/dim]")
+
+        latest_version = get_latest_version()
+        if not latest_version:
+            console.print("[red]❌ Could not fetch latest version from GitHub.[/red]")
+            sys.exit(1)
+
+        console.print(f"Latest version: [green]v{latest_version}[/green]")
+
+        if latest_version == __version__:
+            console.print("\n[green]✓[/green] You are already on the latest version!")
+        else:
+            console.print(f"\n[yellow]💡 Update available! Run 'lm upgrade' to update.[/yellow]")
+            console.print(
+                f"[dim]Release notes: "
+                f"https://github.com/jeffmylife/streamlm/releases/tag/v{latest_version}[/dim]"
+            )
+    else:
+        # Perform upgrade
+        success = upgrade_streamlm()
+        sys.exit(0 if success else 1)
+
+
 @app.command(name="sessions")
 def sessions_cmd(
     list_all: bool = typer.Option(False, "--list", "-l", help="List all sessions"),
@@ -1064,7 +1104,7 @@ def main():
     # If first arg is not a known command, inject 'chat'
     if len(sys.argv) > 1:
         first_arg = sys.argv[1]
-        known_commands = ['chat', 'config', 'sessions']
+        known_commands = ['chat', 'config', 'sessions', 'upgrade']
         global_flags = ['--version', '-v', '--help', '--install-completion', '--show-completion']
 
         # If first arg is not a command and not a global flag, default to chat
