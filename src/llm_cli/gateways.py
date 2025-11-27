@@ -177,9 +177,24 @@ class GatewayRouter:
         Returns:
             Normalized model name (e.g., openai/gpt-4o)
         """
-        # If model already has provider prefix, use it
+        # Model ID mappings for friendly names -> actual API IDs
+        model_id_map = {
+            "claude-opus-4.5": "claude-opus-4-20250514",
+            "claude-sonnet-4.5": "claude-sonnet-4-5-20250929",
+        }
+
+        # If model already has provider prefix, extract and map the model part
         if "/" in model:
+            parts = model.split("/", 1)
+            if len(parts) == 2:
+                prefix, model_name = parts
+                # Map the model name if needed
+                mapped_model = model_id_map.get(model_name, model_name)
+                return f"{prefix}/{mapped_model}"
             return model
+
+        # Map model name if needed
+        model_clean = model_id_map.get(model, model)
 
         # Add provider prefix if known
         if provider and provider != "unknown":
@@ -196,12 +211,12 @@ class GatewayRouter:
             gateway_provider = provider_map.get(provider, provider)
 
             # For certain models, clean up the name
-            model_clean = model.replace("gemini/", "").replace("ollama/", "")
+            model_clean = model_clean.replace("gemini/", "").replace("ollama/", "")
 
             return f"{gateway_provider}/{model_clean}"
 
         # If no provider detected, return as-is
-        return model
+        return model_clean
 
     def supports_reasoning(self, model: str, gateway: str) -> bool:
         """Check if reasoning features are supported for this model/gateway combo.
